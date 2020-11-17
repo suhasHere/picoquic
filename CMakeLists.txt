@@ -223,6 +223,23 @@ target_link_libraries(picoquic_sample
 
 target_include_directories(picoquic_sample PRIVATE loglib picoquic)
 
+add_executable(forty-bytes
+        datagram-echo/datagram.c
+        datagram-echo/echo.c
+)
+
+target_link_libraries(forty-bytes
+        picoquic-log
+        picoquic-core
+        ${PTLS_LIBRARIES}
+        ${OPENSSL_LIBRARIES}
+        ${CMAKE_DL_LIBS}
+        ${CMAKE_THREAD_LIBS_INIT}
+)
+
+target_include_directories(forty-bytes PRIVATE loglib picoquic)
+
+
 set(TEST_EXES picoquic_ct picohttp_ct)
 
 # get all project files for formatting
