@@ -171,6 +171,7 @@ int echo_dg_callback(picoquic_cnx_t* cnx,
 						if (ctx != NULL) {
 							ctx->nb_dg_server_received++;
 							// echo the data
+							fprintf(stdout, "server: echo\n");
 							send_datagram(cnx);
 							ctx->nb_dg_server_sent++;
 						}
