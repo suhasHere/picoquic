@@ -2440,7 +2440,10 @@ void* picoquic_packet_loop_v3(void* v_ctx)
     if ((nb_sockets = picoquic_packet_loop_open_sockets(param, s_ctx, ecn_value)) <= 0) {
         ret = PICOQUIC_ERROR_UNEXPECTED_ERROR;
     }
-    else if (qmux != NULL) {
+    else {
+        thread_ctx->primary_socket_fd = s_ctx[0].fd;
+    }
+    if (ret == 0 && qmux != NULL) {
         qmux_buffer_size = 0x4000;
         qmux_buffer = (uint8_t*)malloc(qmux_buffer_size);
 

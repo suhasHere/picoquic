@@ -278,6 +278,7 @@ typedef struct st_picoquic_network_thread_ctx_t {
     volatile int thread_should_close;
     volatile int thread_is_closed;
     int return_code;
+    int primary_socket_fd;
 } picoquic_network_thread_ctx_t;
 
 picoquic_network_thread_ctx_t* picoquic_start_network_thread(
