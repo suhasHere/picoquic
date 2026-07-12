@@ -1565,6 +1565,10 @@ void picoquic_reinsert_by_wake_time(picoquic_quic_t* quic, picoquic_cnx_t* cnx, 
 
 static void picoquic_wake_list_promote_ready(picoquic_quic_t* quic, uint64_t max_wake_time)
 {
+    /* Fast path: skip tree traversal when ready list already has work */
+    if (quic->cnx_wake_ready_first != NULL) {
+        return;
+    }
     uint64_t due_time = (max_wake_time == 0) ? picoquic_get_quic_time(quic) : max_wake_time;
 
     for (;;) {
