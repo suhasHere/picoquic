@@ -2695,17 +2695,187 @@ void* picoquic_packet_loop_v3(void* v_ctx)
                 ret = 0;
             }
 
-            /* We limit the number of packets sent in a loop, no make sure that
+            /* We limit the number of packets sent in a loop, to make sure that
             * the code will not spend a lot of time sending packets while
             * packets may be adding in the receive queue.
              */
-            /* TODO: isolate the UDP sending logic in a function. */
+#if defined(__linux__) && !defined(_WINDOWS) && !defined(PICOQUIC_WITH_IO_URING) && defined(PICOQUIC_BATCH_SENDMMSG)
+            /* Batch send path: accumulate packets, then send with sendmmsg.
+             * This reduces syscall overhead from N sendmsg to 1 sendmmsg.
+             * Only used on Linux when GSO is not active (send_msg_size == 0).
+             */
+            if (send_msg_size == 0) {
+#define PICOQUIC_SENDMMSG_BATCH_MAX 64
+                struct {
+                    struct sockaddr_storage peer_addr;
+                    struct sockaddr_storage local_addr;
+                    int if_index;
+                    SOCKET_TYPE send_socket;
+                    picoquic_cnx_t* cnx;
+                    size_t length;
+                    size_t offset;
+                } batch_info[PICOQUIC_SENDMMSG_BATCH_MAX];
+                /* Use the send_buffer as a large arena: each packet gets a slice.
+                 * Max packet ~1500 bytes, 64 packets = 96KB; send_buffer_size is 64KB.
+                 * Limit batch to what fits in the buffer.
+                 */
+                size_t batch_count = 0;
+                size_t buffer_offset = 0;
+                size_t effective_batch_max = send_batch_max;
+                if (effective_batch_max > PICOQUIC_SENDMMSG_BATCH_MAX) {
+                    effective_batch_max = PICOQUIC_SENDMMSG_BATCH_MAX;
+                }
+
+                /* Phase 1: Prepare packets into contiguous buffer slices */
+                while (ret == 0 && nb_packets_sent < effective_batch_max) {
+                    struct sockaddr_storage peer_addr;
+                    struct sockaddr_storage local_addr = { 0 };
+                    int if_index = 0;
+                    size_t remaining = (buffer_offset < send_buffer_size) ?
+                        (send_buffer_size - buffer_offset) : 0;
+
+                    if (remaining < PICOQUIC_MAX_PACKET_SIZE) {
+                        break; /* Not enough buffer space for another packet */
+                    }
+
+                    send_length = 0;
+                    ret = picoquic_prepare_next_packet_ex(quic, current_time,
+                        send_buffer + buffer_offset, remaining, &send_length,
+                        &peer_addr, &local_addr, &if_index, &log_cid, &last_cnx,
+                        NULL /* no GSO in batch path */);
+                    if (ret != 0 || send_length == 0) {
+                        break;
+                    }
+
+                    nb_packets_sent++;
+                    if (send_length > param->send_length_max) {
+                        param->send_length_max = send_length;
+                    }
+
+                    /* Resolve the send socket */
+                    SOCKET_TYPE send_socket = INVALID_SOCKET;
+                    uint16_t send_port = (peer_addr.ss_family == AF_INET) ?
+                        ((struct sockaddr_in*)&local_addr)->sin_port :
+                        ((struct sockaddr_in6*)&local_addr)->sin6_port;
+
+                    for (int i = 0; i < nb_sockets_available; i++) {
+                        if (s_ctx[i].af == peer_addr.ss_family) {
+                            send_socket = s_ctx[i].fd;
+                            if (send_port == 0 && !param->prefer_extra_socket) {
+                                break;
+                            }
+                            if (s_ctx[i].n_port == send_port) {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (send_socket == INVALID_SOCKET) {
+                        if (nb_sockets_available < PICOQUIC_PACKET_LOOP_SOCKETS_MAX) {
+                            picoquic_socket_ctx_t* new_ctx = &s_ctx[nb_sockets_available];
+                            memset(new_ctx, 0, sizeof(*new_ctx));
+                            new_ctx->af = peer_addr.ss_family;
+                            if (peer_addr.ss_family == AF_INET6) {
+                                new_ctx->port = ntohs(((struct sockaddr_in6*)&peer_addr)->sin6_port);
+                            }
+                            else {
+                                new_ctx->port = ntohs(((struct sockaddr_in*)&peer_addr)->sin_port);
+                            }
+                            new_ctx->n_port = htons(new_ctx->port);
+                            if (picoquic_packet_loop_open_socket(param, new_ctx, ecn_value) == 0) {
+                                send_socket = new_ctx->fd;
+                                send_port = new_ctx->n_port;
+                                nb_sockets_available++;
+                                if (nb_sockets < nb_sockets_available) {
+                                    DBG_PRINTF("new socket, nb = %d", nb_sockets_available);
+                                    nb_sockets = nb_sockets_available;
+#if defined(PICOQUIC_WITH_POLL)
+                                    picoquic_packet_loop_set_fds(poll_list, poll_list_size, s_ctx, nb_sockets_available,
+                                        sqmux_ctx, nb_qmux_sockets, thread_ctx, current_time);
+#endif
+                                }
+                            }
+                        }
+                    }
+
+                    batch_info[batch_count].peer_addr = peer_addr;
+                    batch_info[batch_count].local_addr = local_addr;
+                    batch_info[batch_count].if_index = if_index;
+                    batch_info[batch_count].send_socket = send_socket;
+                    batch_info[batch_count].cnx = last_cnx;
+                    batch_info[batch_count].length = send_length;
+                    batch_info[batch_count].offset = buffer_offset;
+                    batch_count++;
+
+                    bytes_sent += send_length;
+                    buffer_offset += send_length;
+                }
+
+                /* Phase 2: Send accumulated packets using sendmmsg, grouped by socket */
+                if (batch_count > 0) {
+                    struct mmsghdr mmsg_batch[PICOQUIC_SENDMMSG_BATCH_MAX];
+                    struct iovec iovecs[PICOQUIC_SENDMMSG_BATCH_MAX];
+                    size_t sent_idx = 0;
+
+                    while (sent_idx < batch_count) {
+                        /* Group consecutive packets for the same socket */
+                        SOCKET_TYPE current_socket = batch_info[sent_idx].send_socket;
+                        size_t group_start = sent_idx;
+                        size_t group_count = 0;
+
+                        while (sent_idx < batch_count &&
+                               batch_info[sent_idx].send_socket == current_socket &&
+                               group_count < PICOQUIC_SENDMMSG_BATCH_MAX) {
+                            size_t gi = sent_idx;
+                            memset(&mmsg_batch[group_count], 0, sizeof(struct mmsghdr));
+                            iovecs[group_count].iov_base = send_buffer + batch_info[gi].offset;
+                            iovecs[group_count].iov_len = batch_info[gi].length;
+                            mmsg_batch[group_count].msg_hdr.msg_iov = &iovecs[group_count];
+                            mmsg_batch[group_count].msg_hdr.msg_iovlen = 1;
+                            mmsg_batch[group_count].msg_hdr.msg_name = &batch_info[gi].peer_addr;
+                            mmsg_batch[group_count].msg_hdr.msg_namelen =
+                                (batch_info[gi].peer_addr.ss_family == AF_INET) ?
+                                sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+                            group_count++;
+                            sent_idx++;
+                        }
+
+                        if (current_socket != INVALID_SOCKET && group_count > 0) {
+                            int mm_ret = sendmmsg((int)current_socket, mmsg_batch,
+                                (unsigned int)group_count, 0);
+                            if (mm_ret < 0) {
+                                /* Fallback: send individually on error */
+                                for (size_t fi = group_start; fi < group_start + group_count; fi++) {
+                                    int sock_err = 0;
+                                    picoquic_sendmsg(batch_info[fi].send_socket,
+                                        (struct sockaddr*)&batch_info[fi].peer_addr,
+                                        (struct sockaddr*)&batch_info[fi].local_addr,
+                                        batch_info[fi].if_index,
+                                        (const char*)(send_buffer + batch_info[fi].offset),
+                                        (int)batch_info[fi].length, 0, &sock_err);
+                                }
+                            }
+                        }
+                        else if (current_socket == INVALID_SOCKET) {
+                            /* Log error for packets with no valid socket */
+                            for (size_t fi = group_start; fi < group_start + group_count; fi++) {
+                                picoquic_log_context_free_app_message(quic, &log_cid,
+                                    "Batch send: no valid socket for packet %zu", fi);
+                            }
+                        }
+                    }
+                }
+            }
+            else
+#endif /* PICOQUIC_BATCH_SENDMMSG */
+            {
+            /* Original per-packet send path */
             while (ret == 0 && nb_packets_sent < send_batch_max) {
                 struct sockaddr_storage peer_addr;
                 struct sockaddr_storage local_addr = { 0 };
                 int if_index = 0;
 
-                send_length = 0; 
+                send_length = 0;
                 ret = picoquic_prepare_next_packet_ex(quic, current_time,
                     send_buffer, send_buffer_size, &send_length,
                     &peer_addr, &local_addr, &if_index, &log_cid, &last_cnx,
@@ -2784,6 +2954,7 @@ void* picoquic_packet_loop_v3(void* v_ctx)
                     break;
                 }
             }
+            } /* end of non-batch path */
 
             if (ret == 0 && loop_callback != NULL) {
                 ret = loop_callback(quic, picoquic_packet_loop_after_send, loop_callback_ctx, &bytes_sent);
