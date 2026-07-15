@@ -232,8 +232,8 @@ int picoquic_mark_active_stream_internal(picoquic_cnx_t* cnx,
                 if (!stream->is_active) {
                     stream->is_active = 1;
                     picoquic_reinsert_by_wake_time(cnx->quic, cnx, picoquic_get_quic_time(cnx->quic));
-                    picoquic_update_output_stream(cnx, stream);
                 }
+                picoquic_update_output_stream(cnx, stream);
             }
             else {
                 ret = PICOQUIC_ERROR_CANNOT_SET_ACTIVE_STREAM;
@@ -1092,7 +1092,7 @@ uint8_t* picoquic_format_ready_stream_frames(picoquic_cnx_t* cnx, picoquic_path_
     *stream_tried_and_failed = (!more_stream_data && bytes_next == bytes_previous);
 
     if (!more_stream_data && current_priority != UINT8_MAX) {
-        /* TODO: remove this call to find_ready_stream_path, and compute the 
+        /* TODO: remove this call to find_ready_stream_path, and compute the
          * "more data" bit directly during the send loop.
          */
         more_stream_data |= (picoquic_find_ready_stream_path(cnx, NULL, 0) != NULL);

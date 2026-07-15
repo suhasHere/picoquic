@@ -1999,6 +1999,28 @@ int picoquic_ech_create_config_file(char const* public_name, char const* private
 int picoquic_base64_decode(uint8_t** v, size_t* v_len, char const* b64_txt);
 int picoquic_base64_encode(const uint8_t* v, size_t v_len, char* b64, size_t b64_size, size_t* b64_len);
 
+/* Relay fan-out: build and encrypt a QUIC packet containing a STREAM frame
+ * with the given data, bypassing the normal prepare_next_packet flow.
+ * This is much faster for relay fan-out where the same payload goes to many
+ * connections — it skips splay tree scheduling, congestion checks, and
+ * stream output list management.
+ *
+ * Returns the wire length written to send_buffer, or 0 on failure.
+ * The caller must send the resulting packet on the wire.
+ * The packet is automatically queued for retransmission tracking.
+ *
+ * Note: This does NOT check congestion window or flow control.
+ * The relay is responsible for rate limiting.
+ */
+size_t picoquic_relay_build_stream_packet(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    const uint8_t* data,
+    size_t data_length,
+    uint8_t* send_buffer,
+    size_t send_buffer_max,
+    uint64_t current_time);
+
 #ifdef __cplusplus
 }
 #endif

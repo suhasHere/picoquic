@@ -3831,3 +3831,128 @@ int picoquic_prepare_next_packet(picoquic_quic_t* quic,
     return picoquic_prepare_next_packet_ex(quic, current_time, send_buffer, send_buffer_max, send_length,
         p_addr_to, p_addr_from, if_index, log_cid, p_last_cnx, NULL);
 }
+
+/* Relay fan-out: build a QUIC packet with a STREAM frame directly,
+ * bypassing prepare_next_packet's scheduling, congestion, and timer overhead.
+ */
+size_t picoquic_relay_build_stream_packet(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    const uint8_t* data,
+    size_t data_length,
+    uint8_t* send_buffer,
+    size_t send_buffer_max,
+    uint64_t current_time)
+{
+    picoquic_path_t* path_x;
+    picoquic_packet_context_t* pkt_ctx;
+    picoquic_stream_head_t* stream;
+    picoquic_packet_t* packet;
+    size_t header_length;
+    size_t checksum_overhead;
+    size_t length;
+    size_t send_length = 0;
+    uint8_t* bytes;
+    uint8_t* bytes_next;
+    uint8_t* bytes_max;
+
+    if (cnx == NULL || cnx->cnx_state != picoquic_state_ready) {
+        return 0;
+    }
+
+    path_x = cnx->path[0];
+    if (path_x == NULL) {
+        return 0;
+    }
+
+    pkt_ctx = &cnx->pkt_ctx[picoquic_packet_context_application];
+    checksum_overhead = picoquic_get_checksum_length(cnx, picoquic_epoch_1rtt);
+
+    /* Find or create the stream */
+    stream = picoquic_find_stream(cnx, stream_id);
+    if (stream == NULL) {
+        return 0;
+    }
+
+    /* Allocate packet */
+    packet = picoquic_create_packet(cnx->quic);
+    if (packet == NULL) {
+        return 0;
+    }
+
+    /* Set packet metadata */
+    packet->ptype = picoquic_packet_1rtt_protected;
+    packet->pc = picoquic_packet_context_application;
+    packet->send_time = current_time;
+    packet->send_path = path_x;
+    packet->is_ack_eliciting = 1;
+
+    /* Predict header length */
+    header_length = picoquic_predict_packet_header_length(cnx,
+        picoquic_packet_1rtt_protected, pkt_ctx);
+    packet->offset = header_length;
+    packet->sequence_number = pkt_ctx->send_sequence;
+
+    bytes = packet->bytes;
+    bytes_next = bytes + header_length;
+    bytes_max = bytes + send_buffer_max - checksum_overhead;
+
+    /* Build the STREAM frame directly */
+    {
+        uint8_t* frame_start = bytes_next;
+
+        /* Format stream frame header: type + stream_id + offset */
+        bytes_next = picoquic_format_stream_frame_header(
+            bytes_next, bytes_max, stream_id, stream->sent_offset);
+        if (bytes_next == NULL) {
+            picoquic_recycle_packet(cnx->quic, packet);
+            return 0;
+        }
+
+        /* Check if data fits */
+        size_t space = bytes_max - bytes_next;
+        size_t to_send = data_length;
+        if (to_send > space) {
+            /* Add LEN bit and length field — data won't fill packet */
+            to_send = space;
+        }
+
+        if (to_send == 0) {
+            picoquic_recycle_packet(cnx->quic, packet);
+            return 0;
+        }
+
+        /* If this is the last frame in the packet, don't need LEN bit.
+         * But if data < space, we need LEN bit so padding isn't treated as data.
+         * For relay fan-out, the STREAM frame IS the entire payload, so no LEN needed. */
+        if (to_send < space) {
+            /* Need length field — set LEN bit */
+            *frame_start |= 2;
+            bytes_next = picoquic_frames_varint_encode(bytes_next, bytes_max, to_send);
+            if (bytes_next == NULL) {
+                picoquic_recycle_packet(cnx->quic, packet);
+                return 0;
+            }
+        }
+
+        /* Copy the data */
+        memcpy(bytes_next, data, to_send);
+        bytes_next += to_send;
+
+        /* Update stream state */
+        stream->sent_offset += to_send;
+        cnx->data_sent += to_send;
+    }
+
+    length = bytes_next - bytes;
+    packet->length = length;
+    packet->checksum_overhead = checksum_overhead;
+
+    /* Encrypt, protect header, queue for retransmit */
+    picoquic_finalize_and_protect_packet_tuple(cnx, packet, 0,
+        length, header_length, checksum_overhead,
+        &send_length, send_buffer, send_buffer_max,
+        path_x, current_time, path_x->first_tuple, 1);
+
+    return send_length;
+}

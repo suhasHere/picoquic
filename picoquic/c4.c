@@ -115,7 +115,7 @@
 #define C4_ALPHA_PUSH_100_0 2048 /* 150.0% % */
 #define C4_ALPHA_PUSH_200_0 3072 /* 150.0% % */
 
-#define C4_INITIAL_PACING 0x20000 /* 1,048,576 bit/s */
+#define C4_INITIAL_PACING 0x2FAF080 /* 50,000,000 bit/s = 50 Mbps initial pacing */
 
 #if 1
 uint64_t c4_push_rate_by_probe_level[C4_PROBE_LEVEL_MAX + 1] = {
