@@ -596,6 +596,12 @@ typedef struct st_picoquic_quic_t {
     struct st_picoquic_cnx_t* cnx_wake_ready_last;
     picosplay_tree_t cnx_wake_tree;
 
+    /* QUIC-RT: Batch-level optimization counter.
+     * When > 0, some per-packet checks are skipped (retransmit, ACK generation).
+     * Reset to 0 at the start of each send batch. Incremented per packet. */
+    uint32_t batch_packet_count;
+    unsigned int batch_checks_enabled : 1; /* Enable batch-level check skipping */
+
     struct st_picoquic_cnx_t* cnx_in_progress;
 
     picohash_table* table_cnx_by_id;

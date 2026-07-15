@@ -3800,9 +3800,14 @@ int picoquic_prepare_next_packet_ex(picoquic_quic_t* quic,
 
         if (cnx == NULL) {
             *send_length = 0;
+            quic->batch_packet_count = 0; /* Reset batch at end of round */
         }
         else {
-            ret = picoquic_prepare_packet_ex(cnx, current_time, send_buffer, send_buffer_max, send_length, p_addr_to, p_addr_from, 
+            /* QUIC-RT: Track batch position for batch-level check skipping */
+            if (quic->batch_checks_enabled) {
+                quic->batch_packet_count++;
+            }
+            ret = picoquic_prepare_packet_ex(cnx, current_time, send_buffer, send_buffer_max, send_length, p_addr_to, p_addr_from,
                 if_index, send_msg_size);
             if (log_cid != NULL) {
                 *log_cid = cnx->initial_cnxid;

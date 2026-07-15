@@ -2019,6 +2019,13 @@ int picoquic_base64_encode(const uint8_t* v, size_t v_len, char* b64, size_t b64
  */
 void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable);
 
+/* QUIC-RT: Enable GSO batch-level checks.
+ * When enabled, per-packet retransmit scan and ACK generation are
+ * skipped for packets 2..N within a GSO batch. Only the first
+ * packet in each batch runs the full checks.
+ */
+void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable);
+
 /* QUIC-RT: Lightweight stream flags for media channels.
  * skip_flow_control: bypass per-stream maxdata checks
  * fixed_priority: don't reorder stream in output list after send

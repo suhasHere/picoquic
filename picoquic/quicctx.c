@@ -1586,7 +1586,10 @@ picoquic_cnx_t* picoquic_get_earliest_cnx_to_wake(picoquic_quic_t* quic, uint64_
 {
     picoquic_cnx_t* cnx;
 
-    picoquic_wake_list_promote_ready(quic, max_wake_time);
+    /* QUIC-RT: Skip wake list promotion within a GSO batch (no new ACKs during send) */
+    if (!quic->batch_checks_enabled || quic->batch_packet_count <= 1) {
+        picoquic_wake_list_promote_ready(quic, max_wake_time);
+    }
 
     cnx = quic->cnx_wake_ready_first;
     while (cnx != NULL && max_wake_time != 0 && cnx->next_wake_time > max_wake_time) {
@@ -4216,6 +4219,12 @@ void picoquic_seed_bandwidth(picoquic_cnx_t* cnx, uint64_t rtt_min, uint64_t cwi
 void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable)
 {
     cnx->lazy_loss_detection = (enable != 0) ? 1 : 0;
+}
+
+void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable)
+{
+    quic->batch_checks_enabled = (enable != 0) ? 1 : 0;
+    quic->batch_packet_count = 0;
 }
 
 void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
