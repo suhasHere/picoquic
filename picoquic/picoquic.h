@@ -2033,6 +2033,13 @@ void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable);
 void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
     int skip_flow_control, int fixed_priority);
 
+/* QUIC-RT Phase 2A: Media channel mode.
+ * Enable fixed-priority channel array instead of sorted output stream list.
+ * Register streams as channels — they are scanned in array order (0 = highest priority).
+ */
+void picoquic_set_media_channel_mode(picoquic_cnx_t* cnx, int enable);
+int picoquic_register_media_channel(picoquic_cnx_t* cnx, uint64_t stream_id);
+
 size_t picoquic_relay_build_stream_packet(
     picoquic_cnx_t* cnx,
     uint64_t stream_id,

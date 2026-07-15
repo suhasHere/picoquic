@@ -4237,6 +4237,27 @@ void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
     }
 }
 
+void picoquic_set_media_channel_mode(picoquic_cnx_t* cnx, int enable)
+{
+    cnx->media_channel_mode = (enable != 0) ? 1 : 0;
+    if (enable) {
+        cnx->num_media_channels = 0;
+        memset(cnx->media_channels, 0, sizeof(cnx->media_channels));
+    }
+}
+
+int picoquic_register_media_channel(picoquic_cnx_t* cnx, uint64_t stream_id)
+{
+    if (cnx->num_media_channels >= PICOQUIC_MAX_MEDIA_CHANNELS) return -1;
+    picoquic_stream_head_t* stream = picoquic_find_stream(cnx, stream_id);
+    if (stream == NULL) return -1;
+    /* Set lightweight flags automatically */
+    stream->skip_flow_control = 1;
+    stream->fixed_priority = 1;
+    cnx->media_channels[cnx->num_media_channels++] = stream;
+    return cnx->num_media_channels - 1;
+}
+
 void picoquic_set_default_pmtud_policy(picoquic_quic_t* quic, picoquic_pmtud_policy_enum pmtud_policy)
 {
     PICOQUIC_THREAD_CHECK(quic);

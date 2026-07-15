@@ -1291,7 +1291,15 @@ typedef struct st_picoquic_cnx_t {
     unsigned int is_qmux_tls_ready : 1; /* TLS handshake of QMux connection not complete */
     unsigned int lazy_loss_detection : 1; /* QUIC-RT: move RACK to ACK path, periodic PTO */
     unsigned int retransmit_needed_flag : 1; /* Set by ACK path when RACK detects loss */
+    unsigned int media_channel_mode : 1; /* QUIC-RT Phase 2A: use fixed channel array instead of output list */
     uint64_t lazy_pto_next_check; /* Next time to run PTO check (microseconds) */
+
+    /* QUIC-RT Phase 2A: Media channel array — fixed-priority scheduling
+     * Replaces the sorted output stream linked list for media connections.
+     * Up to 16 pre-allocated channel slots, scanned in priority order. */
+#define PICOQUIC_MAX_MEDIA_CHANNELS 16
+    picoquic_stream_head_t* media_channels[PICOQUIC_MAX_MEDIA_CHANNELS];
+    int num_media_channels;
 
     /* PMTUD policy */
     picoquic_pmtud_policy_enum pmtud_policy;

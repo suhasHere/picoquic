@@ -947,6 +947,17 @@ int picoquic_mark_direct_receive_stream(picoquic_cnx_t* cnx, uint64_t stream_id,
 
 picoquic_stream_head_t* picoquic_find_ready_stream_path(picoquic_cnx_t* cnx, picoquic_path_t* path_x, int is_coalesced)
 {
+    /* QUIC-RT Phase 2A: Media channel mode — fixed array scan */
+    if (cnx->media_channel_mode && cnx->num_media_channels > 0) {
+        for (int i = 0; i < cnx->num_media_channels; i++) {
+            picoquic_stream_head_t* ch = cnx->media_channels[i];
+            if (ch != NULL && picoquic_find_ready_stream_has_data(cnx, ch)) {
+                return ch;
+            }
+        }
+        return NULL;
+    }
+
     picoquic_stream_head_t* first_stream = cnx->output_streams.first_output_stream;
     picoquic_stream_head_t* stream = first_stream;
     picoquic_stream_head_t* found_stream = NULL;
