@@ -756,7 +756,7 @@ int picoquic_find_ready_stream_has_data(picoquic_cnx_t* cnx, picoquic_stream_hea
     else if (stream->is_active ||
         (stream->send_queue != NULL && stream->send_queue->length > stream->send_queue->offset) ||
         (stream->fin_requested && !stream->fin_sent)) {
-        if (stream->sent_offset >= stream->maxdata_remote) {
+        if (!stream->skip_flow_control && stream->sent_offset >= stream->maxdata_remote) {
             cnx->stream_blocked = 1;
             has_data = 0;
         }
@@ -1015,6 +1015,10 @@ void picoquic_reorder_output_stream_after_send(picoquic_cnx_t* cnx, picoquic_str
     /* Remove from output queue if not active any more. */
     if (!picoquic_find_ready_stream_has_data(cnx, stream)) {
         picoquic_remove_output_stream(cnx, stream);
+    }
+    /* QUIC-RT: skip reorder for fixed-priority streams */
+    else if (stream->fixed_priority) {
+        /* Leave in current position — priority never changes */
     }
     else if ((stream->stream_priority & 1) == 0 && stream->last_time_data_sent != old_time_sent) {
         /* TODO: should consider update in place */

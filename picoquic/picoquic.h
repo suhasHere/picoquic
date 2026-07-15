@@ -2019,6 +2019,13 @@ int picoquic_base64_encode(const uint8_t* v, size_t v_len, char* b64, size_t b64
  */
 void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable);
 
+/* QUIC-RT: Lightweight stream flags for media channels.
+ * skip_flow_control: bypass per-stream maxdata checks
+ * fixed_priority: don't reorder stream in output list after send
+ */
+void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
+    int skip_flow_control, int fixed_priority);
+
 size_t picoquic_relay_build_stream_packet(
     picoquic_cnx_t* cnx,
     uint64_t stream_id,
