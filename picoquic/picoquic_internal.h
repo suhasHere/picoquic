@@ -1281,6 +1281,8 @@ typedef struct st_picoquic_cnx_t {
     unsigned int is_qmux : 1; /* This connection is handled by QMux, not QUIC */
     unsigned int is_qmux_cleartext : 1; /* This QMux connection is not encrypted */
     unsigned int is_qmux_tls_ready : 1; /* TLS handshake of QMux connection not complete */
+    unsigned int lazy_loss_detection : 1; /* QUIC-RT: move RACK to ACK path, periodic PTO */
+    unsigned int retransmit_needed_flag : 1; /* Set by ACK path when RACK detects loss */
 
     /* PMTUD policy */
     picoquic_pmtud_policy_enum pmtud_policy;

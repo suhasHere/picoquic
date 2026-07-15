@@ -4213,6 +4213,11 @@ void picoquic_seed_bandwidth(picoquic_cnx_t* cnx, uint64_t rtt_min, uint64_t cwi
     cnx->seed_ip_addr_length = ip_addr_length;
 }
 
+void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable)
+{
+    cnx->lazy_loss_detection = (enable != 0) ? 1 : 0;
+}
+
 void picoquic_set_default_pmtud_policy(picoquic_quic_t* quic, picoquic_pmtud_policy_enum pmtud_policy)
 {
     PICOQUIC_THREAD_CHECK(quic);

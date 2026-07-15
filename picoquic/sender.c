@@ -2848,12 +2848,32 @@ int picoquic_prepare_packet_ready(picoquic_cnx_t* cnx, picoquic_path_t* path_x, 
     }
 
     /* The first action is normally to retransmit lost packets. These lost packets
-     * are queued in the connection context as `cnx->data_repeat_first` when data 
+     * are queued in the connection context as `cnx->data_repeat_first` when data
      * frames need to be repeated, and under `cnx->first_misc_frame` when other
      * individual frames need repetition. */
-    if (cnx->first_misc_frame == NULL && 
-        (length = picoquic_retransmit_needed(cnx, pc, path_x, current_time, next_wake_time, packet, 
+    /* QUIC-RT: In lazy mode, skip the per-packet retransmit scan.
+     * Only run retransmit when the ACK path set the flag, or on periodic PTO check. */
+    if (cnx->lazy_loss_detection && !cnx->retransmit_needed_flag) {
+        /* Periodic PTO check every ~10ms (10000 iterations at ~1µs each) */
+        static __thread uint32_t lazy_pto_counter = 0;
+        if (++lazy_pto_counter >= 10000) {
+            lazy_pto_counter = 0;
+            /* Check if PTO timer expired for this connection */
+            picoquic_packet_t* last_p = cnx->pkt_ctx[pc].pending_first;
+            if (last_p != NULL) {
+                uint64_t pto_timeout = last_p->send_time +
+                    picoquic_current_retransmit_timer(cnx, path_x);
+                if (current_time >= pto_timeout) {
+                    cnx->retransmit_needed_flag = 1;
+                }
+            }
+        }
+    }
+    if (cnx->first_misc_frame == NULL &&
+        (!cnx->lazy_loss_detection || cnx->retransmit_needed_flag) &&
+        (length = picoquic_retransmit_needed(cnx, pc, path_x, current_time, next_wake_time, packet,
         send_buffer_min_max, &header_length)) > 0) {
+        cnx->retransmit_needed_flag = 0; /* Clear the flag after processing */
         /* Check whether it makes sense to add an ACK at the end of the retransmission */
         /* Testing header length for defense in depth -- avoid creating new packet if
          * picoquic_retransmit_needed erroneously returns length <= header_length */

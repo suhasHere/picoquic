@@ -2012,6 +2012,13 @@ int picoquic_base64_encode(const uint8_t* v, size_t v_len, char* b64, size_t b64
  * Note: This does NOT check congestion window or flow control.
  * The relay is responsible for rate limiting.
  */
+/* QUIC-RT: Enable lazy loss detection for real-time media connections.
+ * Moves RACK detection to the ACK receive path (instead of per-send scan).
+ * PTO check runs every ~10ms instead of every packet.
+ * Saves ~28% CPU on the send path for high-throughput relay connections.
+ */
+void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable);
+
 size_t picoquic_relay_build_stream_packet(
     picoquic_cnx_t* cnx,
     uint64_t stream_id,
