@@ -1900,6 +1900,11 @@ void picoquic_apply_rotated_keys(picoquic_cnx_t * cnx, int is_enc)
 
         cnx->key_phase_dec ^= 1;
     }
+
+    /* QUIC-RT: Allow application to customize the new AEAD (e.g., GMAC passthrough) */
+    if (cnx->post_key_rotation_cb != NULL) {
+        cnx->post_key_rotation_cb(cnx, is_enc);
+    }
 }
 
 /*

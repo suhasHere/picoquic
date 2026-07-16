@@ -2026,6 +2026,17 @@ void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable);
  */
 void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable);
 
+/* QUIC-RT: Set callback to customize AEAD after key rotation.
+ * The callback is invoked after each key rotation with the new AEAD context installed.
+ * Use this to swap AES-GCM for GMAC passthrough.
+ */
+typedef void (*picoquic_post_key_rotation_fn)(picoquic_cnx_t* cnx, int is_enc);
+void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_key_rotation_fn cb);
+
+/* Trigger a key rotation on the connection. After rotation completes,
+ * the post_key_rotation_cb is called to customize the new AEAD. */
+int picoquic_start_key_rotation(picoquic_cnx_t* cnx);
+
 /* QUIC-RT: Lightweight stream flags for media channels.
  * skip_flow_control: bypass per-stream maxdata checks
  * fixed_priority: don't reorder stream in output list after send

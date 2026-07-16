@@ -4221,6 +4221,11 @@ void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable)
     cnx->lazy_loss_detection = (enable != 0) ? 1 : 0;
 }
 
+void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_key_rotation_fn cb)
+{
+    cnx->post_key_rotation_cb = cb;
+}
+
 void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable)
 {
     quic->batch_checks_enabled = (enable != 0) ? 1 : 0;

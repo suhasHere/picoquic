@@ -1292,6 +1292,9 @@ typedef struct st_picoquic_cnx_t {
     unsigned int lazy_loss_detection : 1; /* QUIC-RT: move RACK to ACK path, periodic PTO */
     unsigned int retransmit_needed_flag : 1; /* Set by ACK path when RACK detects loss */
     unsigned int media_channel_mode : 1; /* QUIC-RT Phase 2A: use fixed channel array instead of output list */
+    unsigned int use_gmac_after_rotation : 1; /* QUIC-RT: swap to GMAC passthrough on next key rotation */
+    /* QUIC-RT: Callback invoked after key rotation to customize the new AEAD (e.g., GMAC passthrough) */
+    void (*post_key_rotation_cb)(struct st_picoquic_cnx_t* cnx, int is_enc);
     uint64_t lazy_pto_next_check; /* Next time to run PTO check (microseconds) */
 
     /* QUIC-RT Phase 2A: Media channel array — fixed-priority scheduling
