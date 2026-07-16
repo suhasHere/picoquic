@@ -4226,6 +4226,11 @@ void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_
     cnx->post_key_rotation_cb = cb;
 }
 
+void picoquic_set_gmac_fallback_decrypt(picoquic_cnx_t* cnx, void* gmac_aead_ctx)
+{
+    cnx->gmac_fallback_decrypt = gmac_aead_ctx;
+}
+
 void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable)
 {
     quic->batch_checks_enabled = (enable != 0) ? 1 : 0;

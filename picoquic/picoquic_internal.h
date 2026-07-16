@@ -1295,6 +1295,8 @@ typedef struct st_picoquic_cnx_t {
     unsigned int use_gmac_after_rotation : 1; /* QUIC-RT: swap to GMAC passthrough on next key rotation */
     /* QUIC-RT: Callback invoked after key rotation to customize the new AEAD (e.g., GMAC passthrough) */
     void (*post_key_rotation_cb)(struct st_picoquic_cnx_t* cnx, int is_enc);
+    /* QUIC-RT: Fallback AEAD for try-both decrypt during GMAC transition */
+    void* gmac_fallback_decrypt;
     uint64_t lazy_pto_next_check; /* Next time to run PTO check (microseconds) */
 
     /* QUIC-RT Phase 2A: Media channel array — fixed-priority scheduling

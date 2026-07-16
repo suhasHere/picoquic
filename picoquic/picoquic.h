@@ -2033,6 +2033,12 @@ void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable);
 typedef void (*picoquic_post_key_rotation_fn)(picoquic_cnx_t* cnx, int is_enc);
 void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_key_rotation_fn cb);
 
+/* QUIC-RT: Set a GMAC fallback decrypt context. When primary decrypt fails,
+ * this context is tried. If it succeeds, it's promoted to primary.
+ * Used during GMAC transition: subscriber installs GMAC fallback early,
+ * relay switches to GMAC encrypt later. */
+void picoquic_set_gmac_fallback_decrypt(picoquic_cnx_t* cnx, void* gmac_aead_ctx);
+
 /* Trigger a key rotation on the connection. After rotation completes,
  * the post_key_rotation_cb is called to customize the new AEAD. */
 int picoquic_start_key_rotation(picoquic_cnx_t* cnx);
