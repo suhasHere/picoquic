@@ -4111,6 +4111,7 @@ size_t picoquic_relay_stamp_from_template(
 {
     picoquic_path_t* path_x;
     picoquic_packet_context_t* pkt_ctx;
+    picoquic_stream_head_t* stream;
     size_t pn_offset;
     uint64_t sequence_number;
     size_t header_length;
@@ -4130,6 +4131,12 @@ size_t picoquic_relay_stamp_from_template(
     path_x = cnx->path[0];
     if (path_x == NULL) {
         return 0;
+    }
+
+    /* Look up the stream to get correct sent_offset */
+    stream = picoquic_find_stream(cnx, stream_id);
+    if (stream != NULL) {
+        stream_offset = stream->sent_offset;
     }
 
     pkt_ctx = &cnx->pkt_ctx[picoquic_packet_context_application];
@@ -4220,8 +4227,11 @@ size_t picoquic_relay_stamp_from_template(
     /* Header protection: encrypt PN bytes using sample from ciphertext */
     picoquic_protect_packet_header(send_buffer, pn_offset, 0x1F, pn_enc);
 
-    /* Update path stats (no retransmit queue for media) */
+    /* Update path and stream stats (no retransmit queue for media) */
     path_x->bytes_sent += encrypted_len;
+    if (stream != NULL) {
+        stream->sent_offset += payload_len;
+    }
 
     return encrypted_len;
 }
