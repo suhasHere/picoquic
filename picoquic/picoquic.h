@@ -2066,6 +2066,61 @@ size_t picoquic_relay_build_stream_packet(
     size_t send_buffer_max,
     uint64_t current_time);
 
+/* Template Stamping v2: Build-once stamp-N for relay fan-out.
+ *
+ * Rationale: picoquic's per-packet send path costs ~1.27µs across dozens of
+ * small functions (scheduling, flow control, pacing, header construction,
+ * encryption, retransmit queue). For relay fan-out, all subscribers receive
+ * identical payload — only CID, PN, stream_id, offset, and AEAD tag differ.
+ * Template stamping builds ONE packet through picoquic, then stamps copies
+ * for remaining subscribers by patching only the per-subscriber fields and
+ * recomputing the AEAD tag. Per-subscriber cost drops from ~1.27µs to ~0.12µs.
+ *
+ * See: perf-analysis/template_stamping_v2_design.md
+ */
+
+/* Template packet metadata — describes the layout of a pre-encryption
+ * QUIC short header packet so fields can be patched per subscriber. */
+typedef struct st_picoquic_packet_template {
+    uint8_t bytes[1500];        /* Pre-encryption packet bytes */
+    size_t total_len;           /* Total length before AEAD tag */
+    size_t header_len;          /* QUIC header length (= AAD for AEAD) */
+    size_t pn_offset;           /* Byte offset of packet number */
+    uint8_t pn_len;             /* PN length (always 4) */
+    uint8_t dcid_len;           /* Destination CID length */
+    size_t stream_frame_offset; /* Byte offset of STREAM frame type byte */
+    size_t payload_offset;      /* Byte offset of STREAM frame payload data */
+    size_t payload_len;         /* Length of payload data */
+    size_t checksum_overhead;   /* AEAD tag length (16) */
+    uint8_t flags_byte;         /* Flags byte (for key phase, spin bit) */
+} picoquic_packet_template_t;
+
+/* Build a template from the first subscriber.
+ * Constructs a full QUIC packet (via normal picoquic path), encrypts it,
+ * sends it via send_buffer, AND captures the pre-encryption layout in tmpl.
+ * Returns: send_length (encrypted packet in send_buffer), 0 on failure. */
+size_t picoquic_relay_build_template(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    const uint8_t* data, size_t data_length,
+    picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time);
+
+/* Stamp a template for a different subscriber.
+ * Patches CID, PN, stream_id, and offset in the template, then encrypts
+ * and applies header protection. Does NOT touch picoquic's retransmit queue
+ * (media packets are fire-and-forget). DOES increment send_sequence and
+ * update stream->sent_offset for PN/offset consistency.
+ * Returns: send_length (encrypted packet in send_buffer), 0 on failure. */
+size_t picoquic_relay_stamp_from_template(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    uint64_t stream_offset,
+    const picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time);
+
 #ifdef __cplusplus
 }
 #endif

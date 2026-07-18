@@ -3979,3 +3979,249 @@ size_t picoquic_relay_build_stream_packet(
 
     return send_length;
 }
+
+/* Template Stamping v2: Build-once stamp-N for relay fan-out.
+ *
+ * picoquic's per-packet path costs ~1.27µs across dozens of small functions.
+ * For relay fan-out, all subscribers get identical payload — only CID, PN,
+ * stream_id, offset, and AEAD tag differ. This function builds the first
+ * packet normally and captures the pre-encryption layout as a template.
+ * picoquic_relay_stamp_from_template() then stamps copies for remaining
+ * subscribers at ~0.12µs each (memcpy + patch + AEAD + header protection).
+ *
+ * See: perf-analysis/template_stamping_v2_design.md
+ */
+size_t picoquic_relay_build_template(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    const uint8_t* data, size_t data_length,
+    picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time)
+{
+    picoquic_path_t* path_x;
+    picoquic_packet_context_t* pkt_ctx;
+    picoquic_stream_head_t* stream;
+    size_t header_length;
+    size_t checksum_overhead;
+    size_t length;
+    size_t send_length = 0;
+
+    if (cnx == NULL || cnx->cnx_state != picoquic_state_ready || tmpl == NULL) {
+        return 0;
+    }
+
+    path_x = cnx->path[0];
+    if (path_x == NULL) {
+        return 0;
+    }
+
+    pkt_ctx = &cnx->pkt_ctx[picoquic_packet_context_application];
+    checksum_overhead = picoquic_get_checksum_length(cnx, picoquic_epoch_1rtt);
+
+    stream = picoquic_find_stream(cnx, stream_id);
+    if (stream == NULL) {
+        return 0;
+    }
+
+    /* Build the pre-encryption packet into tmpl->bytes */
+    header_length = picoquic_predict_packet_header_length(cnx,
+        picoquic_packet_1rtt_protected, pkt_ctx);
+
+    uint8_t* bytes = tmpl->bytes;
+    uint8_t* bytes_next = bytes + header_length;
+    uint8_t* bytes_max = bytes + sizeof(tmpl->bytes) - checksum_overhead;
+
+    /* Record template metadata */
+    tmpl->header_len = header_length;
+    tmpl->dcid_len = path_x->first_tuple->p_remote_cnxid->cnx_id.id_len;
+    tmpl->pn_offset = 1 + tmpl->dcid_len;  /* flags(1) + CID */
+    tmpl->pn_len = 4;  /* always 4-byte PN */
+    tmpl->checksum_overhead = checksum_overhead;
+
+    /* Build STREAM frame header */
+    tmpl->stream_frame_offset = header_length;
+    uint8_t* frame_start = bytes_next;
+    bytes_next = picoquic_format_stream_frame_header(
+        bytes_next, bytes_max, stream_id, stream->sent_offset);
+    if (bytes_next == NULL) {
+        return 0;
+    }
+
+    /* Check space and copy payload */
+    size_t space = bytes_max - bytes_next;
+    size_t to_send = data_length;
+    if (to_send > space) {
+        to_send = space;
+    }
+    if (to_send == 0) {
+        return 0;
+    }
+
+    /* Add LEN bit if payload doesn't fill packet */
+    if (to_send < space) {
+        *frame_start |= 2;
+        bytes_next = picoquic_frames_varint_encode(bytes_next, bytes_max, to_send);
+        if (bytes_next == NULL) {
+            return 0;
+        }
+    }
+
+    tmpl->payload_offset = bytes_next - bytes;
+    tmpl->payload_len = to_send;
+    memcpy(bytes_next, data, to_send);
+    bytes_next += to_send;
+
+    length = bytes_next - bytes;
+    tmpl->total_len = length;
+
+    /* Now build the actual encrypted packet for the first subscriber.
+     * Use the existing picoquic_relay_build_stream_packet path — it handles
+     * encryption, header protection, PN allocation, retransmit queue.
+     */
+    send_length = picoquic_relay_build_stream_packet(
+        cnx, stream_id, data, data_length,
+        send_buffer, send_buffer_max, current_time);
+
+    /* Capture the flags byte from the encrypted output (has key_phase + spin) */
+    if (send_length > 0) {
+        tmpl->flags_byte = send_buffer[0];
+    }
+
+    return send_length;
+}
+
+/* Stamp a template for a different subscriber.
+ *
+ * Does NOT allocate a picoquic_packet_t or touch picoquic's retransmit queue.
+ * Media fan-out packets are fire-and-forget (500ms object expiry). The relay
+ * does not retransmit stale media — subscribers handle loss at application
+ * layer (request next keyframe, skip lost audio).
+ *
+ * DOES increment cnx->pkt_ctx[app].send_sequence so that picoquic's PN space
+ * stays monotonic for ACK processing of control packets.
+ */
+size_t picoquic_relay_stamp_from_template(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    uint64_t stream_offset,
+    const picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time)
+{
+    picoquic_path_t* path_x;
+    picoquic_packet_context_t* pkt_ctx;
+    size_t pn_offset;
+    uint64_t sequence_number;
+    size_t header_length;
+    uint8_t work[1500];
+    uint8_t* w;
+    uint8_t* w_max;
+    size_t payload_len;
+    size_t total_pre_encrypt;
+    size_t encrypted_len;
+    void* aead_context;
+    void* pn_enc;
+
+    if (cnx == NULL || cnx->cnx_state != picoquic_state_ready || tmpl == NULL) {
+        return 0;
+    }
+
+    path_x = cnx->path[0];
+    if (path_x == NULL) {
+        return 0;
+    }
+
+    pkt_ctx = &cnx->pkt_ctx[picoquic_packet_context_application];
+    aead_context = cnx->crypto_context[picoquic_epoch_1rtt].aead_encrypt;
+    pn_enc = cnx->crypto_context[picoquic_epoch_1rtt].pn_enc;
+
+    if (aead_context == NULL || pn_enc == NULL) {
+        return 0;
+    }
+
+    /* Allocate packet number */
+    sequence_number = pkt_ctx->send_sequence++;
+
+    /* Build QUIC short header: flags(1) + DCID(N) + PN(4) */
+    w = work;
+    w_max = work + sizeof(work) - tmpl->checksum_overhead;
+
+    /* Flags byte: short header (0x40) + key_phase + PN len = 3 (means 4 bytes) */
+    *w = 0x40 | 0x03;  /* QUIC bit + 4-byte PN */
+    if (cnx->key_phase_enc) {
+        *w |= 0x04;  /* key phase bit */
+    }
+    w++;
+
+    /* DCID */
+    uint8_t dcid_len = path_x->first_tuple->p_remote_cnxid->cnx_id.id_len;
+    memcpy(w, path_x->first_tuple->p_remote_cnxid->cnx_id.id, dcid_len);
+    w += dcid_len;
+
+    /* Packet number (4 bytes, pre-header-protection) */
+    pn_offset = w - work;
+    picoformat_32(w, (uint32_t)sequence_number);
+    w += 4;
+
+    header_length = w - work;
+
+    /* Build STREAM frame header with this subscriber's stream_id and offset */
+    w = picoquic_format_stream_frame_header(w, w_max, stream_id, stream_offset);
+    if (w == NULL) {
+        pkt_ctx->send_sequence--;  /* rollback PN */
+        return 0;
+    }
+
+    /* Check if payload fits */
+    payload_len = tmpl->payload_len;
+    if (payload_len > (size_t)(w_max - w)) {
+        payload_len = (size_t)(w_max - w);
+    }
+
+    /* Add LEN bit + length if payload doesn't fill remaining space */
+    if (payload_len < (size_t)(w_max - w)) {
+        work[header_length] |= 2;  /* Set LEN bit on STREAM frame type */
+        w = picoquic_frames_varint_encode(w, w_max, payload_len);
+        if (w == NULL) {
+            pkt_ctx->send_sequence--;
+            return 0;
+        }
+    }
+
+    /* Copy payload from template (the identical media data) */
+    memcpy(w, tmpl->bytes + tmpl->payload_offset, payload_len);
+    w += payload_len;
+
+    total_pre_encrypt = w - work;
+
+    /* Pad to minimum for PN encryption sample (pn_offset + 4 + pn_iv_size) */
+    {
+        size_t pn_iv_size = picoquic_pn_iv_size(pn_enc);
+        size_t min_len = pn_offset + 4 + pn_iv_size - tmpl->checksum_overhead;
+        total_pre_encrypt = picoquic_pad_to_target_length(work, total_pre_encrypt, min_len);
+    }
+
+    /* Copy header to send_buffer (header is AAD, not encrypted) */
+    memcpy(send_buffer, work, header_length);
+
+    /* AEAD encrypt: input = work[header..total], AAD = send_buffer[0..header] */
+    encrypted_len = picoquic_aead_encrypt_generic(
+        send_buffer + header_length,
+        work + header_length,
+        total_pre_encrypt - header_length,
+        sequence_number,
+        send_buffer,
+        header_length,
+        aead_context);
+
+    encrypted_len += header_length;
+
+    /* Header protection: encrypt PN bytes using sample from ciphertext */
+    picoquic_protect_packet_header(send_buffer, pn_offset, 0x1F, pn_enc);
+
+    /* Update path stats (no retransmit queue for media) */
+    path_x->bytes_sent += encrypted_len;
+
+    return encrypted_len;
+}
