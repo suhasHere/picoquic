@@ -668,8 +668,20 @@ size_t picoquic_remove_packet_protection(picoquic_cnx_t* cnx,
                     cnx->crypto_context[picoquic_epoch_1rtt].aead_decrypt);
             } else {
                 decoded = picoquic_aead_decrypt_generic(decoded_bytes + ph->offset,
-                    bytes + ph->offset, ph->payload_length, ph->pn64, decoded_bytes, ph->offset, 
+                    bytes + ph->offset, ph->payload_length, ph->pn64, decoded_bytes, ph->offset,
                     cnx->crypto_context[picoquic_epoch_1rtt].aead_decrypt);
+            }
+            /* QUIC-RT: If primary decrypt fails and GMAC fallback exists, try it */
+            if (decoded > ph->payload_length && cnx->gmac_fallback_decrypt != NULL) {
+                decoded = picoquic_aead_decrypt_generic(decoded_bytes + ph->offset,
+                    bytes + ph->offset, ph->payload_length, ph->pn64, decoded_bytes, ph->offset,
+                    cnx->gmac_fallback_decrypt);
+                if (decoded <= ph->payload_length) {
+                    /* GMAC succeeded — promote to primary */
+                    cnx->crypto_context_old.aead_decrypt = cnx->crypto_context[picoquic_epoch_1rtt].aead_decrypt;
+                    cnx->crypto_context[picoquic_epoch_1rtt].aead_decrypt = cnx->gmac_fallback_decrypt;
+                    cnx->gmac_fallback_decrypt = NULL;
+                }
             }
             if (decoded <= ph->payload_length && ph->pn64 < ack_ctx->crypto_rotation_sequence) {
                 ack_ctx->crypto_rotation_sequence = ph->pn64;

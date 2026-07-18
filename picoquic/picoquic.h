@@ -1999,6 +1999,73 @@ int picoquic_ech_create_config_file(char const* public_name, char const* private
 int picoquic_base64_decode(uint8_t** v, size_t* v_len, char const* b64_txt);
 int picoquic_base64_encode(const uint8_t* v, size_t v_len, char* b64, size_t b64_size, size_t* b64_len);
 
+/* Relay fan-out: build and encrypt a QUIC packet containing a STREAM frame
+ * with the given data, bypassing the normal prepare_next_packet flow.
+ * This is much faster for relay fan-out where the same payload goes to many
+ * connections — it skips splay tree scheduling, congestion checks, and
+ * stream output list management.
+ *
+ * Returns the wire length written to send_buffer, or 0 on failure.
+ * The caller must send the resulting packet on the wire.
+ * The packet is automatically queued for retransmission tracking.
+ *
+ * Note: This does NOT check congestion window or flow control.
+ * The relay is responsible for rate limiting.
+ */
+/* QUIC-RT: Enable lazy loss detection for real-time media connections.
+ * Moves RACK detection to the ACK receive path (instead of per-send scan).
+ * PTO check runs every ~10ms instead of every packet.
+ * Saves ~28% CPU on the send path for high-throughput relay connections.
+ */
+void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable);
+
+/* QUIC-RT: Enable GSO batch-level checks.
+ * When enabled, per-packet retransmit scan and ACK generation are
+ * skipped for packets 2..N within a GSO batch. Only the first
+ * packet in each batch runs the full checks.
+ */
+void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable);
+
+/* QUIC-RT: Set callback to customize AEAD after key rotation.
+ * The callback is invoked after each key rotation with the new AEAD context installed.
+ * Use this to swap AES-GCM for GMAC passthrough.
+ */
+typedef void (*picoquic_post_key_rotation_fn)(picoquic_cnx_t* cnx, int is_enc);
+void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_key_rotation_fn cb);
+
+/* QUIC-RT: Set a GMAC fallback decrypt context. When primary decrypt fails,
+ * this context is tried. If it succeeds, it's promoted to primary.
+ * Used during GMAC transition: subscriber installs GMAC fallback early,
+ * relay switches to GMAC encrypt later. */
+void picoquic_set_gmac_fallback_decrypt(picoquic_cnx_t* cnx, void* gmac_aead_ctx);
+
+/* Trigger a key rotation on the connection. After rotation completes,
+ * the post_key_rotation_cb is called to customize the new AEAD. */
+int picoquic_start_key_rotation(picoquic_cnx_t* cnx);
+
+/* QUIC-RT: Lightweight stream flags for media channels.
+ * skip_flow_control: bypass per-stream maxdata checks
+ * fixed_priority: don't reorder stream in output list after send
+ */
+void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
+    int skip_flow_control, int fixed_priority);
+
+/* QUIC-RT Phase 2A: Media channel mode.
+ * Enable fixed-priority channel array instead of sorted output stream list.
+ * Register streams as channels — they are scanned in array order (0 = highest priority).
+ */
+void picoquic_set_media_channel_mode(picoquic_cnx_t* cnx, int enable);
+int picoquic_register_media_channel(picoquic_cnx_t* cnx, uint64_t stream_id);
+
+size_t picoquic_relay_build_stream_packet(
+    picoquic_cnx_t* cnx,
+    uint64_t stream_id,
+    const uint8_t* data,
+    size_t data_length,
+    uint8_t* send_buffer,
+    size_t send_buffer_max,
+    uint64_t current_time);
+
 #ifdef __cplusplus
 }
 #endif

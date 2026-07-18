@@ -596,6 +596,12 @@ typedef struct st_picoquic_quic_t {
     struct st_picoquic_cnx_t* cnx_wake_ready_last;
     picosplay_tree_t cnx_wake_tree;
 
+    /* QUIC-RT: Batch-level optimization counter.
+     * When > 0, some per-packet checks are skipped (retransmit, ACK generation).
+     * Reset to 0 at the start of each send batch. Incremented per packet. */
+    uint32_t batch_packet_count;
+    unsigned int batch_checks_enabled : 1; /* Enable batch-level check skipping */
+
     struct st_picoquic_cnx_t* cnx_in_progress;
 
     picohash_table* table_cnx_by_id;
@@ -777,6 +783,8 @@ typedef struct st_picoquic_stream_head_t {
     unsigned int is_discarded : 1; /* There should be no more callback for that stream, the application has discarded it */
     unsigned int use_app_flow_control : 1; /* Do not automatically increment the flow control window, wait for app calls. */
     unsigned int is_not_coalesced : 1; /* do not mix data for this stream with data from other stream in same packet */
+    unsigned int skip_flow_control : 1; /* QUIC-RT: bypass per-stream flow control checks */
+    unsigned int fixed_priority : 1; /* QUIC-RT: don't reorder in output list after send */
 } picoquic_stream_head_t;
 
 #define IS_CLIENT_STREAM_ID(id) (unsigned int)(((id) & 1) == 0)
@@ -1281,6 +1289,22 @@ typedef struct st_picoquic_cnx_t {
     unsigned int is_qmux : 1; /* This connection is handled by QMux, not QUIC */
     unsigned int is_qmux_cleartext : 1; /* This QMux connection is not encrypted */
     unsigned int is_qmux_tls_ready : 1; /* TLS handshake of QMux connection not complete */
+    unsigned int lazy_loss_detection : 1; /* QUIC-RT: move RACK to ACK path, periodic PTO */
+    unsigned int retransmit_needed_flag : 1; /* Set by ACK path when RACK detects loss */
+    unsigned int media_channel_mode : 1; /* QUIC-RT Phase 2A: use fixed channel array instead of output list */
+    unsigned int use_gmac_after_rotation : 1; /* QUIC-RT: swap to GMAC passthrough on next key rotation */
+    /* QUIC-RT: Callback invoked after key rotation to customize the new AEAD (e.g., GMAC passthrough) */
+    void (*post_key_rotation_cb)(struct st_picoquic_cnx_t* cnx, int is_enc);
+    /* QUIC-RT: Fallback AEAD for try-both decrypt during GMAC transition */
+    void* gmac_fallback_decrypt;
+    uint64_t lazy_pto_next_check; /* Next time to run PTO check (microseconds) */
+
+    /* QUIC-RT Phase 2A: Media channel array — fixed-priority scheduling
+     * Replaces the sorted output stream linked list for media connections.
+     * Up to 16 pre-allocated channel slots, scanned in priority order. */
+#define PICOQUIC_MAX_MEDIA_CHANNELS 16
+    picoquic_stream_head_t* media_channels[PICOQUIC_MAX_MEDIA_CHANNELS];
+    int num_media_channels;
 
     /* PMTUD policy */
     picoquic_pmtud_policy_enum pmtud_policy;

@@ -1565,6 +1565,10 @@ void picoquic_reinsert_by_wake_time(picoquic_quic_t* quic, picoquic_cnx_t* cnx, 
 
 static void picoquic_wake_list_promote_ready(picoquic_quic_t* quic, uint64_t max_wake_time)
 {
+    /* Fast path: skip tree traversal when ready list already has work */
+    if (quic->cnx_wake_ready_first != NULL) {
+        return;
+    }
     uint64_t due_time = (max_wake_time == 0) ? picoquic_get_quic_time(quic) : max_wake_time;
 
     for (;;) {
@@ -1582,7 +1586,10 @@ picoquic_cnx_t* picoquic_get_earliest_cnx_to_wake(picoquic_quic_t* quic, uint64_
 {
     picoquic_cnx_t* cnx;
 
-    picoquic_wake_list_promote_ready(quic, max_wake_time);
+    /* QUIC-RT: Skip wake list promotion within a GSO batch (no new ACKs during send) */
+    if (!quic->batch_checks_enabled || quic->batch_packet_count <= 1) {
+        picoquic_wake_list_promote_ready(quic, max_wake_time);
+    }
 
     cnx = quic->cnx_wake_ready_first;
     while (cnx != NULL && max_wake_time != 0 && cnx->next_wake_time > max_wake_time) {
@@ -4207,6 +4214,58 @@ void picoquic_seed_bandwidth(picoquic_cnx_t* cnx, uint64_t rtt_min, uint64_t cwi
     }
     memcpy(cnx->seed_ip_addr, ip_addr, ip_addr_length);
     cnx->seed_ip_addr_length = ip_addr_length;
+}
+
+void picoquic_set_lazy_loss_detection(picoquic_cnx_t* cnx, int enable)
+{
+    cnx->lazy_loss_detection = (enable != 0) ? 1 : 0;
+}
+
+void picoquic_set_post_key_rotation_callback(picoquic_cnx_t* cnx, picoquic_post_key_rotation_fn cb)
+{
+    cnx->post_key_rotation_cb = cb;
+}
+
+void picoquic_set_gmac_fallback_decrypt(picoquic_cnx_t* cnx, void* gmac_aead_ctx)
+{
+    cnx->gmac_fallback_decrypt = gmac_aead_ctx;
+}
+
+void picoquic_set_batch_checks(picoquic_quic_t* quic, int enable)
+{
+    quic->batch_checks_enabled = (enable != 0) ? 1 : 0;
+    quic->batch_packet_count = 0;
+}
+
+void picoquic_set_stream_lightweight(picoquic_cnx_t* cnx, uint64_t stream_id,
+    int skip_flow_control, int fixed_priority)
+{
+    picoquic_stream_head_t* stream = picoquic_find_stream(cnx, stream_id);
+    if (stream != NULL) {
+        stream->skip_flow_control = (skip_flow_control != 0) ? 1 : 0;
+        stream->fixed_priority = (fixed_priority != 0) ? 1 : 0;
+    }
+}
+
+void picoquic_set_media_channel_mode(picoquic_cnx_t* cnx, int enable)
+{
+    cnx->media_channel_mode = (enable != 0) ? 1 : 0;
+    if (enable) {
+        cnx->num_media_channels = 0;
+        memset(cnx->media_channels, 0, sizeof(cnx->media_channels));
+    }
+}
+
+int picoquic_register_media_channel(picoquic_cnx_t* cnx, uint64_t stream_id)
+{
+    if (cnx->num_media_channels >= PICOQUIC_MAX_MEDIA_CHANNELS) return -1;
+    picoquic_stream_head_t* stream = picoquic_find_stream(cnx, stream_id);
+    if (stream == NULL) return -1;
+    /* Set lightweight flags automatically */
+    stream->skip_flow_control = 1;
+    stream->fixed_priority = 1;
+    cnx->media_channels[cnx->num_media_channels++] = stream;
+    return cnx->num_media_channels - 1;
 }
 
 void picoquic_set_default_pmtud_policy(picoquic_quic_t* quic, picoquic_pmtud_policy_enum pmtud_policy)

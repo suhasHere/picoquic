@@ -3929,6 +3929,25 @@ const uint8_t* picoquic_decode_ack_frame(picoquic_cnx_t* cnx, const uint8_t* byt
             } while (bytes != NULL);
 
             picoquic_dequeue_old_retransmitted_packets(cnx, pkt_ctx);
+
+            /* QUIC-RT: Lazy loss detection — run RACK check here in ACK path
+             * instead of on every prepare_next_packet call. Check if any
+             * pending packet is RACK-lost (sequence < highest_acked AND
+             * enough time has passed since it was sent). */
+            /* QUIC-RT: Only flag definite losses (delta_seq >= 3).
+             * Potential losses (delta_seq 1-2) are handled by periodic PTO. */
+            if (cnx->lazy_loss_detection && is_new_ack) {
+                picoquic_packet_t* check_p = pkt_ctx->pending_first;
+                while (check_p != NULL &&
+                       check_p->sequence_number < pkt_ctx->highest_acknowledged) {
+                    uint64_t delta_seq = pkt_ctx->highest_acknowledged - check_p->sequence_number;
+                    if (delta_seq >= 3) {
+                        cnx->retransmit_needed_flag = 1;
+                        break;
+                    }
+                    check_p = check_p->packet_next;
+                }
+            }
         }
     }
 

@@ -232,8 +232,8 @@ int picoquic_mark_active_stream_internal(picoquic_cnx_t* cnx,
                 if (!stream->is_active) {
                     stream->is_active = 1;
                     picoquic_reinsert_by_wake_time(cnx->quic, cnx, picoquic_get_quic_time(cnx->quic));
-                    picoquic_update_output_stream(cnx, stream);
                 }
+                picoquic_update_output_stream(cnx, stream);
             }
             else {
                 ret = PICOQUIC_ERROR_CANNOT_SET_ACTIVE_STREAM;
@@ -756,7 +756,7 @@ int picoquic_find_ready_stream_has_data(picoquic_cnx_t* cnx, picoquic_stream_hea
     else if (stream->is_active ||
         (stream->send_queue != NULL && stream->send_queue->length > stream->send_queue->offset) ||
         (stream->fin_requested && !stream->fin_sent)) {
-        if (stream->sent_offset >= stream->maxdata_remote) {
+        if (!stream->skip_flow_control && stream->sent_offset >= stream->maxdata_remote) {
             cnx->stream_blocked = 1;
             has_data = 0;
         }
@@ -947,6 +947,17 @@ int picoquic_mark_direct_receive_stream(picoquic_cnx_t* cnx, uint64_t stream_id,
 
 picoquic_stream_head_t* picoquic_find_ready_stream_path(picoquic_cnx_t* cnx, picoquic_path_t* path_x, int is_coalesced)
 {
+    /* QUIC-RT Phase 2A: Media channel mode — fixed array scan */
+    if (cnx->media_channel_mode && cnx->num_media_channels > 0) {
+        for (int i = 0; i < cnx->num_media_channels; i++) {
+            picoquic_stream_head_t* ch = cnx->media_channels[i];
+            if (ch != NULL && picoquic_find_ready_stream_has_data(cnx, ch)) {
+                return ch;
+            }
+        }
+        return NULL;
+    }
+
     picoquic_stream_head_t* first_stream = cnx->output_streams.first_output_stream;
     picoquic_stream_head_t* stream = first_stream;
     picoquic_stream_head_t* found_stream = NULL;
@@ -1015,6 +1026,10 @@ void picoquic_reorder_output_stream_after_send(picoquic_cnx_t* cnx, picoquic_str
     /* Remove from output queue if not active any more. */
     if (!picoquic_find_ready_stream_has_data(cnx, stream)) {
         picoquic_remove_output_stream(cnx, stream);
+    }
+    /* QUIC-RT: skip reorder for fixed-priority streams */
+    else if (stream->fixed_priority) {
+        /* Leave in current position — priority never changes */
     }
     else if ((stream->stream_priority & 1) == 0 && stream->last_time_data_sent != old_time_sent) {
         /* TODO: should consider update in place */
@@ -1092,7 +1107,7 @@ uint8_t* picoquic_format_ready_stream_frames(picoquic_cnx_t* cnx, picoquic_path_
     *stream_tried_and_failed = (!more_stream_data && bytes_next == bytes_previous);
 
     if (!more_stream_data && current_priority != UINT8_MAX) {
-        /* TODO: remove this call to find_ready_stream_path, and compute the 
+        /* TODO: remove this call to find_ready_stream_path, and compute the
          * "more data" bit directly during the send loop.
          */
         more_stream_data |= (picoquic_find_ready_stream_path(cnx, NULL, 0) != NULL);
