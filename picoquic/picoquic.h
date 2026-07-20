@@ -2121,6 +2121,48 @@ size_t picoquic_relay_stamp_from_template(
     uint8_t* send_buffer, size_t send_buffer_max,
     uint64_t current_time);
 
+/* Semi-Reliable QUIC Streams: deadline-based retransmission.
+ * Streams marked as semi-reliable have per-message lifetimes. Lost data
+ * is only retransmitted if the deadline hasn't passed. Expired messages
+ * generate STREAM_SKIP frames that advance the receiver past the gap.
+ * See: perf-analysis/semi_reliable_streams_design.md
+ */
+
+/* Mark a stream as semi-reliable with default message lifetime (microseconds).
+ * lifetime_us=0 means fully reliable (standard stream behavior). */
+void picoquic_stream_set_semi_reliable(picoquic_cnx_t* cnx,
+    uint64_t stream_id, uint64_t default_lifetime_us);
+
+/* Write a message with explicit lifetime, priority, and dependency.
+ * Records message boundaries for deadline-based retransmit decisions.
+ * priority: 0=must deliver (reliable), 128=best effort, 255=fire-and-forget
+ * depends_on: offset of dependency message (0=none). If dependency is
+ *   skipped, this message is cascade-skipped too. */
+int picoquic_stream_write_message(picoquic_cnx_t* cnx,
+    uint64_t stream_id, const uint8_t* data, size_t length,
+    uint64_t lifetime_us, uint8_t priority, uint64_t depends_on);
+
+/* Check if a retransmit for this stream/offset should be skipped because
+ * the message has expired. Returns 1 if the retransmit should be skipped. */
+int picoquic_semi_reliable_should_skip_retransmit(picoquic_cnx_t* cnx,
+    uint64_t stream_id, uint64_t offset, size_t length,
+    uint64_t current_time);
+
+/* Template Stamping v2 for DATAGRAM frames (simpler than streams).
+ * No stream_id, no offset, no retransmit — just build-once stamp-N. */
+size_t picoquic_relay_build_datagram_template(
+    picoquic_cnx_t* cnx,
+    const uint8_t* data, size_t data_length,
+    picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time);
+
+size_t picoquic_relay_stamp_datagram(
+    picoquic_cnx_t* cnx,
+    const picoquic_packet_template_t* tmpl,
+    uint8_t* send_buffer, size_t send_buffer_max,
+    uint64_t current_time);
+
 #ifdef __cplusplus
 }
 #endif

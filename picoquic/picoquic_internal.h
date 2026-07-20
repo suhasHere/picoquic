@@ -785,6 +785,8 @@ typedef struct st_picoquic_stream_head_t {
     unsigned int is_not_coalesced : 1; /* do not mix data for this stream with data from other stream in same packet */
     unsigned int skip_flow_control : 1; /* QUIC-RT: bypass per-stream flow control checks */
     unsigned int fixed_priority : 1; /* QUIC-RT: don't reorder in output list after send */
+    /* Semi-reliable stream state (NULL if stream is fully reliable) */
+    struct st_picoquic_semi_reliable_ctx* semi_reliable;
 } picoquic_stream_head_t;
 
 #define IS_CLIENT_STREAM_ID(id) (unsigned int)(((id) & 1) == 0)
