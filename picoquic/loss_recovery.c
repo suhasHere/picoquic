@@ -21,6 +21,7 @@
 
 #include "picoquic_internal.h"
 #include "picoquic_unified_log.h"
+#include "semi_reliable.h"
 #include "tls_api.h"
 #include <stdlib.h>
 #include <string.h>
@@ -751,7 +752,36 @@ int picoquic_copy_before_retransmit(picoquic_packet_t * old_p,
             if (ret == 0) {
                 if (!frame_is_pure_ack) {
                     if (PICOQUIC_IN_RANGE(old_p->bytes[byte_index], picoquic_frame_type_stream_range_min, picoquic_frame_type_stream_range_max)) {
-                        * add_to_data_repeat_queue = 1;
+                        /* Semi-reliable: skip retransmit for expired stream messages */
+                        int skip_this_frame = 0;
+                        {
+                            uint64_t sr_stream_id = 0;
+                            uint64_t sr_offset = 0;
+                            uint64_t sr_length = 0;
+                            const uint8_t* sr_bytes = &old_p->bytes[byte_index];
+                            uint8_t sr_type = *sr_bytes;
+                            sr_bytes++;
+                            sr_bytes = picoquic_frames_varint_decode(sr_bytes,
+                                &old_p->bytes[old_p->length], &sr_stream_id);
+                            if (sr_bytes != NULL && (sr_type & 0x04)) {
+                                sr_bytes = picoquic_frames_varint_decode(sr_bytes,
+                                    &old_p->bytes[old_p->length], &sr_offset);
+                            }
+                            if (sr_bytes != NULL && (sr_type & 0x02)) {
+                                sr_bytes = picoquic_frames_varint_decode(sr_bytes,
+                                    &old_p->bytes[old_p->length], &sr_length);
+                            } else if (sr_bytes != NULL) {
+                                sr_length = (&old_p->bytes[old_p->length]) - sr_bytes;
+                            }
+                            if (sr_bytes != NULL && sr_length > 0) {
+                                skip_this_frame = picoquic_semi_reliable_should_skip_retransmit(
+                                    cnx, sr_stream_id, sr_offset, (size_t)sr_length,
+                                    picoquic_current_time());
+                            }
+                        }
+                        if (!skip_this_frame) {
+                            *add_to_data_repeat_queue = 1;
+                        }
                     }
                     else {
                         if ((force_queue || frame_length > send_buffer_max_minus_checksum - *length)) {
