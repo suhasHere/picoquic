@@ -1,0 +1,2 @@
+[submodule "extern/picoquic"]
+	url = https://github.com/suhasHere/picoquic.git
