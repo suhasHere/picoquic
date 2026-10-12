@@ -60,7 +60,7 @@
 #define C4_ALPHA_PUSH_100_0 2048 /* 150.0% % */
 #define C4_ALPHA_PUSH_200_0 3072 /* 150.0% % */
 
-#define C4_INITIAL_PACING 0x20000 /* 1,048,576 bit/s */
+#define C4_INITIAL_PACING 0x2FAF080 /* 50,000,000 bit/s = 50 Mbps initial pacing */
 #define C4_ALPHA_DRAINING 758 /* 75 % */ /* was 896 */
 #define C4_ALPHA_DRAINING_MID 896 /* 7/8th -- as used in initial draining tests */
 
