@@ -33,6 +33,10 @@
  * TODO: support the QuicDoq scenario, manage extra socket.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE  /* for sendmmsg, struct mmsghdr on Linux */
+#endif
+
 #include <limits.h>
 
 #ifdef _WINDOWS
